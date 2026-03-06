@@ -1,7 +1,9 @@
 // App.js
 import React, { useEffect, useMemo, useState } from "react";
 
-const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://localhost:8001";
+const API_ORDERS = process.env.REACT_APP_API_ORDERS || "http://localhost:8050";
+const API_PRODUCTS = process.env.REACT_APP_API_PRODUCTS || "http://localhost:8070";
+const CART_STORAGE_KEY = "devops_cart_items";
 const FALLBACK_IMAGE =
   "https://images.unsplash.com/photo-1518773553398-650c184e0bb3?auto=format&fit=crop&w=900&q=60";
 
@@ -11,6 +13,7 @@ const CATEGORIES = [
   { key: "wearables", label: "Wearables" },
   { key: "input", label: "Input devices" },
   { key: "displays", label: "Displays" },
+  { key: "components", label: "Components" },
 ];
 
 function money(n) {
@@ -20,19 +23,42 @@ function money(n) {
 export default function App() {
   const [tab, setTab] = useState("all");
   const [q, setQ] = useState("");
-  const [cartCount, setCartCount] = useState(0);
   const [products, setProducts] = useState([]);
   const [loadingProducts, setLoadingProducts] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [orderError, setOrderError] = useState("");
-  const [pendingOrderId, setPendingOrderId] = useState(null);
+  const [sortOrder, setSortOrder] = useState("asc");
+
+  const [isCartOpen, setIsCartOpen] = useState(false);
+  const [cartItems, setCartItems] = useState([]);
+  const [isCheckingOut, setIsCheckingOut] = useState(false);
+  const [checkoutMessage, setCheckoutMessage] = useState("");
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(CART_STORAGE_KEY);
+      if (!raw) {
+        return;
+      }
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setCartItems(parsed);
+      }
+    } catch {
+      localStorage.removeItem(CART_STORAGE_KEY);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(cartItems));
+  }, [cartItems]);
 
   useEffect(() => {
     async function loadProducts() {
       setLoadingProducts(true);
       setLoadError("");
       try {
-        const res = await fetch(`${API_BASE}/products`);
+        const res = await fetch(`${API_PRODUCTS}/products`);
         if (!res.ok) {
           throw new Error(`Products request failed: ${res.status}`);
         }
@@ -46,7 +72,7 @@ export default function App() {
           title: p.name || p.title || "Unnamed Product",
           price: Number(p.price) || 0,
           cat: p.category || p.cat || "all",
-          img: p.image_url || p.img || FALLBACK_IMAGE,
+          img: p.image || p.img || FALLBACK_IMAGE,
           desc: p.description || p.desc || "",
           badge: p.badge || "",
         }));
@@ -61,30 +87,113 @@ export default function App() {
     loadProducts();
   }, []);
 
-  async function handleAddToCart(product) {
+  function handleAddToCart(product) {
     setOrderError("");
-    setPendingOrderId(product.id);
-    try {
-      const res = await fetch(`${API_BASE}/orders`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          product_id: product.id,
-          quantity: 1,
-        }),
-      });
-      if (!res.ok) {
-        throw new Error(`Order request failed: ${res.status}`);
+    setCheckoutMessage("");
+    setCartItems((prev) => {
+      const existing = prev.find((item) => item.id === product.id);
+      if (existing) {
+        return prev.map((item) =>
+          item.id === product.id ? { ...item, qty: item.qty + 1 } : item
+        );
       }
-      setCartCount((c) => c + 1);
-    } catch (err) {
-      setOrderError(err.message || "Failed to create order");
-    } finally {
-      setPendingOrderId(null);
-    }
+      return [
+        ...prev,
+        {
+          id: product.id,
+          title: product.title,
+          price: product.price,
+          img: product.img,
+          qty: 1,
+        },
+      ];
+    });
   }
+
+  function incrementQty(productId) {
+    setCheckoutMessage("");
+    setCartItems((prev) =>
+      prev.map((item) =>
+        item.id === productId ? { ...item, qty: item.qty + 1 } : item
+      )
+    );
+  }
+
+  function decrementQty(productId) {
+    setCheckoutMessage("");
+    setCartItems((prev) =>
+      prev
+        .map((item) =>
+          item.id === productId ? { ...item, qty: item.qty - 1 } : item
+        )
+        .filter((item) => item.qty > 0)
+    );
+  }
+
+  function removeFromCart(productId) {
+    setCheckoutMessage("");
+    setCartItems((prev) => prev.filter((item) => item.id !== productId));
+  }
+
+  async function handleCheckout() {
+    if (!cartItems.length || isCheckingOut) {
+      return;
+    }
+
+    setOrderError("");
+    setCheckoutMessage("");
+    setIsCheckingOut(true);
+
+    const successIds = [];
+    const failedItems = [];
+
+    for (const item of cartItems) {
+      try {
+        const res = await fetch(`${API_ORDERS}/orders`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            product_id: item.id,
+            quantity: item.qty,
+          }),
+        });
+
+        if (!res.ok) {
+          throw new Error(`status ${res.status}`);
+        }
+        successIds.push(item.id);
+      } catch (err) {
+        failedItems.push({
+          id: item.id,
+          title: item.title,
+          error: err.message || "request failed",
+        });
+      }
+    }
+
+    if (failedItems.length === 0) {
+      setCartItems([]);
+      setCheckoutMessage("Checkout complete. Orders saved.");
+    } else {
+      setCartItems((prev) => prev.filter((item) => !successIds.includes(item.id)));
+      const failedNames = failedItems.map((item) => item.title).join(", ");
+      setOrderError(`Some orders failed: ${failedNames}`);
+    }
+
+    setIsCheckingOut(false);
+  }
+
+  const cartCount = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.qty, 0),
+    [cartItems]
+  );
+
+  const cartSubtotal = useMemo(
+    () => cartItems.reduce((sum, item) => sum + item.price * item.qty, 0),
+    [cartItems]
+  );
 
   const filtered = useMemo(() => {
     const ql = q.trim().toLowerCase();
@@ -92,8 +201,19 @@ export default function App() {
       const okTab = tab === "all" ? true : p.cat === tab;
       const okQ = !ql ? true : `${p.title} ${p.desc}`.toLowerCase().includes(ql);
       return okTab && okQ;
-    }).sort((a, b) => a.price - b.price);
+    });
   }, [products, tab, q]);
+
+  const sorted = useMemo(() => {
+    const items = [...filtered];
+
+    return items.sort((a, b) => {
+      if (sortOrder === "asc") {
+        return a.price - b.price;
+      }
+      return b.price - a.price;
+    });
+  }, [filtered, sortOrder]);
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -106,15 +226,9 @@ export default function App() {
                 <span className="text-sm font-black">UC</span>
               </div>
               <div className="text-lg font-extrabold tracking-tight">
-                Final Project
+                <a href="/">Final Project</a>
               </div>
             </div>
-
-            <nav className="hidden md:flex items-center gap-6 text-xs font-semibold tracking-widest text-slate-500">
-              <a className="hover:text-blue-600" href="#systems">SYSTEMS</a>
-              <a className="hover:text-blue-600" href="#peripherals">PERIPHERALS</a>
-              <a className="hover:text-blue-600" href="#components">COMPONENTS</a>
-            </nav>
           </div>
 
           <div className="flex items-center gap-3">
@@ -123,7 +237,7 @@ export default function App() {
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
                 className="w-64 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-600/20"
-                placeholder="find_product --name="
+                placeholder="Search your product..."
               />
             </div>
 
@@ -131,6 +245,7 @@ export default function App() {
               type="button"
               className="relative rounded-lg border border-slate-200 p-2 hover:border-blue-600/40"
               aria-label="cart"
+              onClick={() => setIsCartOpen(true)}
             >
               🛒
               <span className="absolute -right-1 -top-1 grid h-4 w-4 place-items-center rounded-full bg-blue-600 text-[10px] text-white">
@@ -147,13 +262,10 @@ export default function App() {
       <main className="mx-auto max-w-6xl px-4">
         <section className="py-8">
           <div className="relative overflow-hidden rounded-3xl border border-slate-200 bg-slate-950">
-            <div
-              className="min-h-[120px] bg-cover bg-right"
-            >
+            <div className="min-h-[120px] bg-cover bg-right">
               <div className="flex min-h-[120px] flex-col justify-center gap-6 px-8 py-10 md:px-14">
-
                 <h1 className="text-5xl font-extrabold leading-[0.95] tracking-tight text-white md:text-5xl">
-                DevOps eCommerce
+                  DevOps eCommerce
                 </h1>
 
                 <p className="max-w-md text-slate-300">
@@ -188,7 +300,14 @@ export default function App() {
             })}
           </div>
           <div className="hidden md:flex items-center gap-2 pr-2 text-[10px] font-semibold tracking-widest text-slate-500">
-            SORT BY: DEFAULT
+            <select
+              value={sortOrder}
+              onChange={(e) => setSortOrder(e.target.value)}
+              className="rounded border border-slate-200 px-2 py-1 text-xs"
+            >
+              <option value="asc">Price: Low to High</option>
+              <option value="desc">Price: High to Low</option>
+            </select>
           </div>
         </section>
 
@@ -206,14 +325,8 @@ export default function App() {
             </div>
           ) : null}
 
-          {orderError ? (
-            <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
-              {orderError}
-            </div>
-          ) : null}
-
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {filtered.map((p) => (
+            {sorted.map((p) => (
               <div
                 key={p.id}
                 className="group rounded-2xl border border-slate-200 bg-white p-4 transition hover:border-blue-600/40"
@@ -239,17 +352,14 @@ export default function App() {
                       {money(p.price)}
                     </span>
                   </div>
-                  <p className="text-xs leading-relaxed text-slate-500">
-                    {p.desc}
-                  </p>
+                  <p className="text-xs leading-relaxed text-slate-500">{p.desc}</p>
 
                   <button
                     type="button"
                     onClick={() => handleAddToCart(p)}
-                    disabled={pendingOrderId === p.id}
                     className="mt-4 flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 py-3 text-xs font-bold tracking-widest text-white hover:bg-blue-600"
                   >
-                    {pendingOrderId === p.id ? "ADDING..." : "ADD TO SYSTEM"}
+                    ADD TO CART
                   </button>
                 </div>
               </div>
@@ -266,6 +376,112 @@ export default function App() {
           </div>
         </section>
       </main>
+
+      {/* Cart Sidebar */}
+      {isCartOpen ? (
+        <div className="fixed inset-0 z-[60]">
+          <button
+            type="button"
+            className="absolute inset-0 bg-slate-950/40"
+            aria-label="Close cart"
+            onClick={() => setIsCartOpen(false)}
+          />
+          <aside className="absolute right-0 top-0 h-full w-full max-w-md border-l border-slate-200 bg-white p-5 shadow-2xl">
+            <div className="mb-5 flex items-center justify-between">
+              <h2 className="text-sm font-extrabold tracking-widest text-slate-900">
+                CART ({cartCount})
+              </h2>
+              <button
+                type="button"
+                onClick={() => setIsCartOpen(false)}
+                className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:border-blue-600 hover:text-blue-600"
+              >
+                CLOSE
+              </button>
+            </div>
+
+            <div className="flex h-[calc(100%-170px)] flex-col gap-3 overflow-y-auto pr-1">
+              {cartItems.length === 0 ? (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
+                  Your cart is empty.
+                </div>
+              ) : (
+                cartItems.map((item) => (
+                  <div key={item.id} className="rounded-lg border border-slate-200 p-3">
+                    <div className="flex gap-3">
+                      <img
+                        src={item.img}
+                        alt={item.title}
+                        className="h-16 w-16 rounded object-cover"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold text-slate-900">{item.title}</p>
+                        <p className="text-xs text-slate-500">{money(item.price)} each</p>
+                        <p className="text-xs font-semibold text-slate-700">
+                          Line total: {money(item.price * item.qty)}
+                        </p>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => decrementQty(item.id)}
+                          className="rounded border border-slate-200 px-2 py-1 text-xs hover:border-blue-600"
+                        >
+                          -
+                        </button>
+                        <span className="min-w-6 text-center text-sm font-semibold">{item.qty}</span>
+                        <button
+                          type="button"
+                          onClick={() => incrementQty(item.id)}
+                          className="rounded border border-slate-200 px-2 py-1 text-xs hover:border-blue-600"
+                        >
+                          +
+                        </button>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => removeFromCart(item.id)}
+                        className="text-xs font-semibold text-red-600 hover:underline"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {orderError ? (
+              <div className="mt-4 rounded border border-amber-200 bg-amber-50 p-3 text-xs text-amber-700">
+                {orderError}
+              </div>
+            ) : null}
+
+            {checkoutMessage ? (
+              <div className="mt-4 rounded border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-700">
+                {checkoutMessage}
+              </div>
+            ) : null}
+
+            <div className="mt-4 border-t border-slate-200 pt-4">
+              <div className="mb-3 flex items-center justify-between text-sm font-semibold">
+                <span>Subtotal</span>
+                <span>{money(cartSubtotal)}</span>
+              </div>
+              <button
+                type="button"
+                onClick={handleCheckout}
+                disabled={!cartItems.length || isCheckingOut}
+                className="w-full rounded-lg bg-slate-900 py-3 text-xs font-bold tracking-widest text-white disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isCheckingOut ? "CHECKING OUT..." : "CHECKOUT"}
+              </button>
+            </div>
+          </aside>
+        </div>
+      ) : null}
 
       {/* Newsletter */}
       <section className="relative mt-6 bg-slate-950 px-4 py-20 text-center">
@@ -306,7 +522,7 @@ export default function App() {
             <p className="text-xs leading-relaxed text-slate-500">
               PRECISION. PERFORMANCE. PARADIGM SHIFT.
               <br />
-              EST. 2024. TOKYO · SF · LONDON
+              EST. 2024. TOKYO - SF - LONDON
             </p>
           </div>
 
@@ -339,7 +555,7 @@ export default function App() {
               SOCIAL
             </div>
             <div className="flex gap-3">
-              {["✳️", "🔗", "📡"].map((x, i) => (
+              {["*", "#", "@"].map((x, i) => (
                 <a
                   key={i}
                   href="#social"
@@ -355,7 +571,7 @@ export default function App() {
         <div className="border-t border-slate-200">
           <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 px-4 py-6 md:flex-row">
             <p className="text-[10px] font-semibold tracking-widest text-slate-400">
-              © 2024 VORTEX TECHNOLOGIES. ROOT ACCESS GRANTED.
+              (c) 2024 VORTEX TECHNOLOGIES. ROOT ACCESS GRANTED.
             </p>
             <div className="flex gap-6 text-[10px] font-semibold tracking-widest text-slate-400">
               <a className="hover:text-blue-600" href="#protocol">PROTOCOL</a>
