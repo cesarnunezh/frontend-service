@@ -2,7 +2,7 @@
 
 ciPipeline(
   serviceName: 'frontend-service',
-  enableDeploy: false,
+  enableDeploy: true,
   dockerRepo: 'cesarnunezh/frontend-service',
   localImageName: 'frontend-service:ci-local',
   imageBuildCmd: 'make build',
