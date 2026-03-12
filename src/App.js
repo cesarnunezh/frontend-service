@@ -1,8 +1,15 @@
 // App.js
 import React, { useEffect, useMemo, useState } from "react";
 
-const API_ORDERS = process.env.REACT_APP_API_ORDERS || "http://localhost:8050";
-const API_PRODUCTS = process.env.REACT_APP_API_PRODUCTS || "http://localhost:8070";
+const runtimeConfig = window.__APP_CONFIG__ || {};
+const API_ORDERS =
+  runtimeConfig.API_ORDERS ||
+  process.env.REACT_APP_API_ORDERS ||
+  "http://localhost:8050";
+const API_PRODUCTS =
+  runtimeConfig.API_PRODUCTS ||
+  process.env.REACT_APP_API_PRODUCTS ||
+  "http://localhost:8070";
 const CART_STORAGE_KEY = "devops_cart_items";
 const FALLBACK_IMAGE =
   "https://images.unsplash.com/photo-1518773553398-650c184e0bb3?auto=format&fit=crop&w=900&q=60";
