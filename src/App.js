@@ -85,7 +85,7 @@ export default function App() {
         }));
         setProducts(normalized);
       } catch (err) {
-        setLoadError(err.message || "Failed to load products...");
+        setLoadError(err.message || "Failed to load products..");
       } finally {
         setLoadingProducts(false);
       }
