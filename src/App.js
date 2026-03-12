@@ -85,7 +85,7 @@ export default function App() {
         }));
         setProducts(normalized);
       } catch (err) {
-        setLoadError(err.message || "Failed to load products..");
+        setLoadError(err.message || "Failed to load products...");
       } finally {
         setLoadingProducts(false);
       }
@@ -272,7 +272,7 @@ export default function App() {
             <div className="min-h-[120px] bg-cover bg-right">
               <div className="flex min-h-[120px] flex-col justify-center gap-6 px-8 py-10 md:px-14">
                 <h1 className="text-5xl font-extrabold leading-[0.95] tracking-tight text-white md:text-5xl">
-                  DevOps eCommerce
+                  Demo for Phase 6 - DevOps eCommerce
                 </h1>
 
                 <p className="max-w-md text-slate-300">
